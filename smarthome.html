@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EZ-ON 스마트 홈 제어 패널 (Web Serial)</title>
+  <style>
+    :root{--bg:#f6f7fb;--card:#fff;--text:#1f2937;--sub:#6b7280;--pri:#4f46e5;--ok:#059669;--vio:#7c3aed;--amb:#d97706;--ring:#e5e7eb}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Noto Sans',Pretendard,sans-serif;color:var(--text)}
+    .wrap{max-width:1100px;margin:32px auto;padding:0 20px;display:flex;flex-direction:column;gap:20px}
+    header{display:flex;justify-content:space-between;align-items:center}
+    h1{font-size:28px;margin:0;font-weight:800}
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;font-size:14px;font-weight:600}
+    .pill .dot{width:10px;height:10px;border-radius:999px}
+    .btn{border:0;border-radius:12px;padding:10px 14px;font-weight:700;color:#fff;background:var(--pri);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+    .btn:hover{filter:brightness(.95)} .btn.danger{background:#e11d48}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+    @media(max-width:900px){.grid{grid-template-columns:1fr}}
+    .card{background:var(--card);border-radius:18px;box-shadow:0 1px 0 var(--ring),0 8px 20px rgba(0,0,0,.04);padding:18px 18px 16px;display:flex;flex-direction:column;gap:14px}
+    .card h3{margin:0;display:flex;gap:8px;align-items:center;font-size:18px;font-weight:800}
+    .row{display:flex;align-items:end;gap:8px}
+    .label{color:var(--sub);font-weight:700}
+    .val{font-variant-numeric:tabular-nums;font-size:28px;font-weight:900}
+    .unit{color:var(--sub);padding-bottom:3px}
+    .toggle{position:relative;width:52px;height:30px;background:#d1d5db;border-radius:999px;cursor:pointer;transition:.2s}
+    .toggle::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;background:#fff;border-radius:999px;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.2s}
+    .toggle.on{background:#10b981}
+    .toggle.on::after{transform:translateX(22px)}
+    .range{width:100%}
+    .log{height:280px;overflow:auto;border-radius:12px;background:#0b1020;color:#e5e7eb;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;padding:10px}
+    .help{color:var(--sub);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>EZ-ON 스마트 홈 제어 패널</h1>
+      <div style="display:flex;gap:10px;align-items:center">
+        <span id="status-pill" class="pill" style="background:#e5e7eb;color:#374151"><span class="dot" style="background:#9ca3af"></span>상태: 미연결</span>
+        <button id="btn-connect" class="btn">연결</button>
+        <button id="btn-disconnect" class="btn danger" disabled>연결 해제</button>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <h3>✨ 온도 & 습도 모니터링</h3>
+        <div class="row"><div class="label">온도:</div><div id="val-temp" class="val">--</div><div class="unit">°C</div></div>
+        <div class="row"><div class="label">습도:</div><div id="val-hum" class="val">--</div><div class="unit">%</div></div>
+        <button id="btn-query" class="btn" style="width:max-content">값 요청(Q)</button>
+        <div class="help">펌웨어는 1초마다 <code>온도,습도</code>(필수) 또는 <code>온도,습도,밝기</code>(선택) 한 줄을 전송합니다.</div>
+      </div>
+
+      <div class="card">
+        <h3>💡 LED 제어 (D1)</h3>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div class="label">상태</div>
+          <div id="led-toggle" class="toggle" role="switch" aria-checked="false" tabindex="0"></div>
+        </div>
+        <div class="help">켜기: 문자 <code>n</code>, 끄기: 문자 <code>f</code> 를 전송합니다.</div>
+      </div>
+
+      <div class="card">
+        <h3>🕒 서보 모터 제어 (D2)</h3>
+        <div class="label">각도 (0°~180°): <b id="servo-angle-label">49</b>°</div>
+        <input id="servo-range" class="range" type="range" min="0" max="180" value="49" />
+        <button id="btn-servo" class="btn" style="width:max-content">각도 전송</button>
+        <div class="help">프로토콜: <code>s</code> 뒤에 각도 숫자(예: <code>s90</code>)를 전송. 줄바꿈 포함 전송 권장.</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h3>🔆 밝기 센서 (A0)</h3>
+        <div class="row"><div class="label">밝기:</div><div id="val-light" class="val">--</div><div class="unit" id="light-unit"></div></div>
+        <div class="help">펌웨어에서 세 번째 값으로 밝기를 보낼 경우 자동 표시됩니다. (예: <code>28.9,45.0,512</code>)</div>
+      </div>
+      <div class="card" style="grid-column: span 2">
+        <h3>📟 통신 로그</h3>
+        <div id="log" class="log"></div>
+        <div class="help">최근 200줄까지만 유지됩니다.</div>
+      </div>
+    </section>
+  </div>
+
+<script>
+(() => {
+  const MAX_LOG = 200;
+  const statusPill = document.getElementById('status-pill');
+  const btnConnect = document.getElementById('btn-connect');
+  const btnDisconnect = document.getElementById('btn-disconnect');
+  const btnQuery = document.getElementById('btn-query');
+  const ledToggle = document.getElementById('led-toggle');
+  const servoRange = document.getElementById('servo-range');
+  const servoAngleLabel = document.getElementById('servo-angle-label');
+  const btnServo = document.getElementById('btn-servo');
+  const logEl = document.getElementById('log');
+  const vTemp = document.getElementById('val-temp');
+  const vHum = document.getElementById('val-hum');
+  const vLight = document.getElementById('val-light');
+  const lightUnit = document.getElementById('light-unit');
+
+  let port, reader, writer;
+
+  function setConnected(on){
+    if(on){
+      statusPill.style.background = '#d1fae5';
+      statusPill.style.color = '#065f46';
+      statusPill.querySelector('.dot').style.background = '#10b981';
+      statusPill.lastChild.nodeValue = '상태: 연결됨';
+      btnConnect.disabled = true; btnDisconnect.disabled = false;
+    }else{
+      statusPill.style.background = '#e5e7eb';
+      statusPill.style.color = '#374151';
+      statusPill.querySelector('.dot').style.background = '#9ca3af';
+      statusPill.lastChild.nodeValue = '상태: 미연결';
+      btnConnect.disabled = false; btnDisconnect.disabled = true;
+    }
+  }
+
+  function addLog(text, dir){
+    const ts = new Date().toLocaleTimeString([], {hour12:false});
+    const line = `[${ts}] ${dir||''} ${text}`.trim();
+    logEl.insertAdjacentText('beforeend', line + '\n');
+    while(logEl.childNodes.length > MAX_LOG) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  async function connect(){
+    try{
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+
+      const textDecoder = new TextDecoderStream();
+      const readableClosed = port.readable.pipeTo(textDecoder.writable);
+      reader = textDecoder.readable.getReader();
+
+      const textEncoder = new TextEncoderStream();
+      const writableClosed = textEncoder.readable.pipeTo(port.writable);
+      writer = textEncoder.writable.getWriter();
+
+      setConnected(true);
+      addLog('포트 연결됨','SYS');
+
+      readLoop();
+    }catch(e){
+      addLog('연결 실패: ' + e.message,'ERR');
+    }
+  }
+
+  async function disconnect(){
+    try{
+      if(reader){ await reader.cancel(); reader.releaseLock(); reader=null; }
+      if(writer){ await writer.close(); writer.releaseLock(); writer=null; }
+      if(port){ await port.close(); port=null; }
+      setConnected(false);
+      addLog('포트 연결 해제','SYS');
+    }catch(e){ addLog('해제 오류: '+e.message,'ERR'); }
+  }
+
+  async function send(text){
+    if(!writer) return; 
+    addLog(text,'TX');
+    await writer.write(text.endsWith('\n')?text:text+'\n');
+  }
+
+  async function readLoop(){
+    let buf = '';
+    try{
+      while(true){
+        const { value, done } = await reader.read();
+        if(done) break;
+        if(value){
+          buf += value;
+          let idx;
+          while((idx = buf.indexOf('\n')) >= 0){
+            let line = buf.slice(0, idx).replace(/\r/g,'').trim();
+            buf = buf.slice(idx+1);
+            if(!line) continue;
+            addLog(line,'RX');
+            parseLine(line);
+          }
+        }
+      }
+    }catch(e){ addLog('읽기 오류: '+e.message,'ERR'); }
+  }
+
+  function parseLine(line){
+    const parts = line.split(/[,\t ]+/).map(s=>s.trim()).filter(Boolean);
+    if(parts.length >= 1){ const t = parseFloat(parts[0]); if(Number.isFinite(t)) vTemp.textContent = t; }
+    if(parts.length >= 2){ const h = parseFloat(parts[1]); if(Number.isFinite(h)) vHum.textContent = h; }
+    if(parts.length >= 3){ const l = parseFloat(parts[2]); if(Number.isFinite(l)) { vLight.textContent = l; lightUnit.textContent = '(0~1023)'; } }
+  }
+
+  // UI events
+  btnConnect.addEventListener('click', connect);
+  btnDisconnect.addEventListener('click', disconnect);
+  btnQuery.addEventListener('click', () => send('Q'));
+
+  ledToggle.addEventListener('click', () => {
+    const on = !ledToggle.classList.contains('on');
+    ledToggle.classList.toggle('on', on);
+    ledToggle.setAttribute('aria-checked', String(on));
+    send(on ? 'n' : 'f');
+  });
+  ledToggle.addEventListener('keydown', (e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); ledToggle.click(); }});
+
+  servoRange.addEventListener('input', ()=>{ servoAngleLabel.textContent = servoRange.value; });
+  btnServo.addEventListener('click', ()=>{ send('s'+parseInt(servoRange.value,10)); });
+
+  // handle USB disconnect
+  navigator.serial?.addEventListener('disconnect', (e)=>{
+    if(e.target===port){ setConnected(false); addLog('시리얼 장치 분리','SYS'); }
+  });
+})();
+</script>
+</body>
+</html>
